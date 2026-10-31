@@ -1,20 +1,17 @@
 // Stand-alone answer window. Used for questions typed into the toolbar popup and
 // for pages where AnswerKey can't show its in-page panel (browser pages, the PDF
 // viewer, the add-ons store).
-import type { PendingWindowQuestion } from '../shared/protocol';
-import { AnswerPanel } from '../ui/panel';
-import { PANEL_CSS } from '../ui/styles';
+import { createRef } from 'react';
+import { flushSync } from 'react-dom';
+import { createRoot } from 'react-dom/client';
+import { AnswerPanel, type AnswerPanelHandle } from '@/panel/AnswerPanel';
+import type { PendingWindowQuestion } from '@/shared/protocol';
 
-const style = document.createElement('style');
-style.textContent = PANEL_CSS;
-document.head.append(style);
-
-const root = document.createElement('div');
-root.className = 'ak-root ak-window';
-document.getElementById('app')?.append(root);
-
-const panel = new AnswerPanel({ mode: 'window', onClose: () => window.close() });
-root.append(panel.element);
+const panel = createRef<AnswerPanelHandle>();
+const root = createRoot(document.getElementById('app')!);
+flushSync(() => {
+  root.render(<AnswerPanel ref={panel} mode="window" onClose={() => window.close()} />);
+});
 
 void start();
 
@@ -28,6 +25,5 @@ async function start(): Promise<void> {
     await chrome.storage.session.remove(key);
     history.replaceState(null, '', location.pathname);
   }
-  const text = pending.text ?? '';
-  panel.start(pending.page ? 'selection' : 'typed', text, pending.page);
+  panel.current?.start(pending.page ? 'selection' : 'typed', pending.text ?? '', pending.page);
 }

@@ -70,7 +70,7 @@ export type RuntimeMessage =
   | { type: 'open-options' }
   | { type: 'end-conversation'; conversationId: string }
   | { type: 'test-api-key'; apiKey: string; model: string }
-  | { type: 'open-answer-window'; text?: string };
+  | { type: 'open-answer-window'; text?: string; page?: PageInfo };
 
 export type TestKeyResult = { ok: true; modelName: string } | { ok: false; message: string };
 

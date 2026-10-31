@@ -7,6 +7,13 @@ text. AnswerKey uses **your own Anthropic API key**, so there is no account, ser
 | --- | --- |
 | ![Selecting a question shows the Ask Claude button](docs/select.png) | ![The answer panel next to the selection](docs/answer.png) |
 
+| Dark mode | Toolbar popup | Settings |
+| --- | --- | --- |
+| ![The answer panel in dark mode](docs/answer-dark.png) | ![The toolbar popup](docs/popup.png) | ![The settings page](docs/settings.png) |
+
+The interface is built with [shadcn/ui](https://ui.shadcn.com) components and [Lucide](https://lucide.dev)
+icons. (The answers in these screenshots are sample responses.)
+
 ## Features
 
 - **Three ways to ask:** the floating **Ask Claude** button that appears when you select text (mouse or
@@ -125,10 +132,18 @@ web page ── content script ──(Port: question / streamed answer)── ba
   If a model's safety classifier declines a question, the API re-runs it on the fallback model Anthropic
   recommends for that case, and the panel says so. To turn this off, remove the `betas` and `fallbacks` lines
   in `src/background/claude.ts`.
-- **`src/content/`** watches for selections, shows the floating button, and mounts the answer panel.
-- **`src/ui/`** has the answer panel (shared by the in-page panel and the stand-alone answer window),
-  Markdown rendering and styles.
-- **`src/pages/`** has the settings page, toolbar popup and answer window.
+- **`src/content/`** is the small script (about 9 KB) that runs in every page: it watches for selections and
+  shows the floating button. The first time you ask something on a page it imports the React answer panel
+  (`panel.js`), so pages where nothing is asked never load React.
+- **`src/panel/`** is the answer panel in React: the streaming session, turns, follow-ups and Markdown
+  rendering. The in-page panel mounts it inside a closed shadow root; the answer window uses it full-size.
+- **`src/components/ui/`** holds the [shadcn/ui](https://ui.shadcn.com) components (Button, Card, Select,
+  Switch, Alert, Collapsible and more), added with the shadcn CLI. Icons come from
+  [Lucide](https://lucide.dev): `lucide-react` in React, and `lucide` in the content script.
+- **`src/styles/`** is Tailwind CSS v4 with the shadcn theme; light and dark follow your system setting.
+  The build adapts the panel's copy for its shadow root (rem → px, so a page's root font size can't
+  rescale the panel, and initial values for Tailwind's `@property` variables, which shadow roots ignore).
+- **`src/pages/`** has the settings page, toolbar popup and answer window (React).
 - **`src/shared/`** has the settings, model list and message protocol shared by all of the above.
 
 ## Development
@@ -141,11 +156,15 @@ web page ── content script ──(Port: question / streamed answer)── ba
 | `npm run zip` | Builds `answerkey-edge-v<version>.zip`, the file attached to GitHub releases and uploaded to the Edge Add-ons store. |
 | `npm run test:e2e` | End-to-end test (see below). |
 
+**Adding UI components.** `components.json` is set up for the shadcn CLI, so `npx shadcn@latest add dialog`
+(or any other component) writes it into `src/components/ui/`, ready to import from `@/components/ui/…`.
+
 **End-to-end test.** `tests/e2e.cjs` loads `dist/` into Chromium with Playwright, points `api.anthropic.com` at
 a local mock server that streams real server-sent events (`tests/mock-api.cjs`), and drives the extension with
 real mouse selections. It covers the settings page and key check, the request sent to the API, streaming,
 follow-ups and replayed thinking blocks, Stop, Retry, refusals, mid-answer fallbacks, cut-off answers, API
-errors, iframes, text areas, per-site toggles, the popup and the answer window, and that web pages and
+errors, iframes, text areas, per-site toggles, the popup and the answer window, that the React panel loads
+only when needed and its shadcn/Tailwind styles render inside the shadow root, and that web pages and
 content scripts can't read the stored key. It needs Playwright with Chromium and the `openssl` command:
 
 ```bash

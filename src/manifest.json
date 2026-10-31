@@ -36,6 +36,13 @@
       "all_frames": true
     }
   ],
+  "web_accessible_resources": [
+    {
+      "resources": ["panel.js"],
+      "matches": ["<all_urls>"],
+      "use_dynamic_url": true
+    }
+  ],
   "commands": {
     "ask-selection": {
       "suggested_key": {

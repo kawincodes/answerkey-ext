@@ -1,0 +1,81 @@
+/* Claude's answers: Markdown rendered to sanitized HTML inside `.ak-md`. */
+
+.ak-md {
+  font-size: 0.875rem;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.ak-md > :first-child { margin-top: 0; }
+.ak-md > :last-child { margin-bottom: 0; }
+.ak-md :where(p, ul, ol, pre, blockquote, table) { margin: 0 0 0.75rem; }
+.ak-md :where(ul, ol) { padding-left: 1.25rem; }
+.ak-md ul { list-style: disc; }
+.ak-md ol { list-style: decimal; }
+.ak-md li + li { margin-top: 0.25rem; }
+.ak-md li > p { margin: 0; }
+.ak-md li::marker { color: var(--muted-foreground); }
+.ak-md :where(h1, h2, h3, h4, h5, h6) {
+  margin: 1rem 0 0.5rem;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  line-height: 1.4;
+}
+.ak-md :where(strong, b) { font-weight: 600; }
+.ak-md a {
+  color: var(--foreground);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.ak-md code {
+  padding: 0.125rem 0.3rem;
+  border-radius: calc(var(--radius) - 4px);
+  background: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+}
+.ak-md pre {
+  padding: 0.75rem;
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius) - 2px);
+  background: var(--muted);
+  line-height: 1.5;
+}
+.ak-md pre code { padding: 0; background: none; }
+.ak-md blockquote {
+  padding-left: 0.75rem;
+  border-left: 2px solid var(--border);
+  color: var(--muted-foreground);
+}
+.ak-md table {
+  display: block;
+  overflow-x: auto;
+  border-collapse: collapse;
+  font-size: 0.8125rem;
+}
+.ak-md :where(th, td) {
+  padding: 0.375rem 0.625rem;
+  border: 1px solid var(--border);
+  text-align: left;
+}
+.ak-md th { background: var(--muted); font-weight: 600; }
+.ak-md hr { margin: 1rem 0; border: 0; border-top: 1px solid var(--border); }
+
+.ak-md.ak-streaming > p:last-child::after {
+  content: "";
+  display: inline-block;
+  width: 0.45rem;
+  height: 0.95rem;
+  margin-left: 2px;
+  border-radius: 1px;
+  background: currentColor;
+  opacity: 0.55;
+  vertical-align: -2px;
+  animation: ak-blink 1s steps(2, start) infinite;
+}
+@keyframes ak-blink {
+  to { visibility: hidden; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ak-md.ak-streaming > p:last-child::after { animation: none; }
+}

@@ -1,0 +1,13 @@
+/* Styles for the extension's own pages: settings, toolbar popup, answer window. */
+@import "tailwindcss" source("../");
+@import "tw-animate-css";
+@import "./theme.css";
+@import "./markdown.css";
+
+/* Unlayered on purpose: the browser injects a stylesheet into extension pages
+   that shrinks body text to 75% and swaps the font, and unlayered rules beat
+   Tailwind's layered base styles. */
+html body {
+  font-family: var(--font-sans);
+  font-size: 14px;
+}

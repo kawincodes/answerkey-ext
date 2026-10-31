@@ -1,16 +1,20 @@
-// Build script: bundles the TypeScript entry points with esbuild and copies the
-// static files (manifest, HTML, CSS, icons) into dist/.
+// Build script: bundles the TypeScript/React entry points with esbuild, compiles
+// the Tailwind CSS (shadcn/ui theme), and copies the static files (manifest,
+// HTML, icons) into dist/.
 //
 //   node build.mjs           one-off build into dist/
 //   node build.mjs --watch   rebuild on change
 //   node build.mjs --zip     build, then write answerkey-edge-v<version>.zip
 //                            (the package to upload to the Edge Add-ons store)
 
+import tailwindcss from '@tailwindcss/postcss';
 import * as esbuild from 'esbuild';
+import { watch as watchDir } from 'node:fs';
 import { cp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { crc32, deflateRawSync } from 'node:zlib';
+import postcss from 'postcss';
 
 const root = dirname(fileURLToPath(import.meta.url));
 const src = join(root, 'src');
@@ -20,12 +24,54 @@ const zip = process.argv.includes('--zip');
 
 const pkg = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'));
 
-const entryPoints = {
-  background: join(src, 'background/index.ts'),
-  content: join(src, 'content/index.ts'),
-  options: join(src, 'pages/options.ts'),
-  popup: join(src, 'pages/popup.ts'),
-  answer: join(src, 'pages/answer.ts'),
+/** Compiles a Tailwind entry stylesheet; `shadow` adapts it for a shadow root. */
+async function compileCss(entry, { shadow = false } = {}) {
+  const plugins = [tailwindcss({ base: root, optimize: !watch })];
+  if (shadow) plugins.push(shadowRootFixes());
+  const result = await postcss(plugins).process(await readFile(entry, 'utf8'), { from: entry });
+  return result.css;
+}
+
+/**
+ * The in-page panel lives in a shadow root on arbitrary web pages:
+ * - rem units follow the page's root font size (some sites set 10px), so they
+ *   become px at the standard 16px;
+ * - browsers ignore @property rules inside shadow roots, which leaves Tailwind's
+ *   shadow/ring/transform variables without initial values, so they're set
+ *   directly in the base layer.
+ */
+function shadowRootFixes() {
+  const toPx = (value) => value.replace(/(-?\d*\.?\d+)rem\b/g, (_, n) => `${+(parseFloat(n) * 16).toFixed(4)}px`);
+  return {
+    postcssPlugin: 'shadow-root-fixes',
+    OnceExit(css) {
+      const initialValues = [];
+      css.walkAtRules('property', (rule) => {
+        rule.walkDecls('initial-value', (decl) => initialValues.push(`${rule.params}:${decl.value}`));
+      });
+      css.walkDecls((decl) => {
+        if (decl.value.includes('rem')) decl.value = toPx(decl.value);
+      });
+      css.walkAtRules((rule) => {
+        if (rule.params.includes('rem')) rule.params = toPx(rule.params);
+      });
+      if (initialValues.length) {
+        css.append(`@layer base{:host,*,::before,::after,::backdrop{${initialValues.join(';')}}}`);
+      }
+    },
+  };
+}
+
+/** `import css from 'virtual:panel-css'` → the panel's compiled CSS as a string. */
+const panelCssPlugin = {
+  name: 'panel-css',
+  setup(build) {
+    build.onResolve({ filter: /^virtual:panel-css$/ }, () => ({ path: 'panel.css', namespace: 'panel-css' }));
+    build.onLoad({ filter: /.*/, namespace: 'panel-css' }, async () => ({
+      contents: await compileCss(join(src, 'styles/panel.css'), { shadow: true }),
+      loader: 'text',
+    }));
+  },
 };
 
 async function copyStatic() {
@@ -34,10 +80,9 @@ async function copyStatic() {
   await writeFile(join(dist, 'manifest.json'), JSON.stringify(manifest, null, 2) + '\n');
 
   for (const file of await readdir(join(src, 'pages'))) {
-    if (file.endsWith('.html') || file.endsWith('.css')) {
-      await cp(join(src, 'pages', file), join(dist, file));
-    }
+    if (file.endsWith('.html')) await cp(join(src, 'pages', file), join(dist, file));
   }
+  await writeFile(join(dist, 'ui.css'), await compileCss(join(src, 'styles/globals.css')));
   await cp(join(root, 'icons'), join(dist, 'icons'), {
     recursive: true,
     filter: (path) => !path.endsWith('.svg'),
@@ -57,32 +102,58 @@ const copyStaticPlugin = {
 };
 
 /** @type {import('esbuild').BuildOptions} */
-const options = {
-  entryPoints,
+const common = {
   outdir: dist,
   bundle: true,
-  // Content scripts cannot be ES modules, so every bundle is a plain IIFE.
-  format: 'iife',
   platform: 'browser',
   target: ['chrome116'],
-  // The content script loads in every frame of every page, so release builds are
-  // minified. Watch builds stay readable, with source maps, for debugging.
+  jsx: 'automatic',
+  define: { 'process.env.NODE_ENV': JSON.stringify(watch ? 'development' : 'production') },
+  // Release builds are minified; watch builds stay readable, with source maps.
   minify: !watch,
   sourcemap: watch ? 'inline' : false,
   legalComments: 'eof',
   logLevel: 'info',
-  plugins: [copyStaticPlugin],
 };
+
+const builds = [
+  {
+    ...common,
+    // Content scripts can't be ES modules, so these are plain IIFE bundles.
+    format: 'iife',
+    entryPoints: {
+      background: join(src, 'background/index.ts'),
+      content: join(src, 'content/index.ts'),
+      options: join(src, 'pages/options.tsx'),
+      popup: join(src, 'pages/popup.tsx'),
+      answer: join(src, 'pages/answer.tsx'),
+    },
+    plugins: [copyStaticPlugin],
+  },
+  {
+    ...common,
+    // The in-page panel: an ES module the content script imports on first use.
+    format: 'esm',
+    entryPoints: { panel: join(src, 'panel/mount.tsx') },
+    plugins: [panelCssPlugin],
+  },
+];
 
 await rm(dist, { recursive: true, force: true });
 await mkdir(dist, { recursive: true });
 
 if (watch) {
-  const ctx = await esbuild.context(options);
-  await ctx.watch();
+  const contexts = await Promise.all(builds.map((options) => esbuild.context(options)));
+  await Promise.all(contexts.map((ctx) => ctx.watch()));
+  // Stylesheets aren't imported by the bundles, so watch them separately.
+  let timer;
+  watchDir(join(src, 'styles'), () => {
+    clearTimeout(timer);
+    timer = setTimeout(() => contexts.forEach((ctx) => void ctx.rebuild().catch(() => undefined)), 100);
+  });
   console.log('Watching for changes... (load the dist/ folder as an unpacked extension)');
 } else {
-  await esbuild.build(options);
+  await Promise.all(builds.map((options) => esbuild.build(options)));
   if (zip) {
     const out = join(root, `answerkey-edge-v${pkg.version}.zip`);
     await writeZip(dist, out);

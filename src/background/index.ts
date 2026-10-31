@@ -64,7 +64,8 @@ chrome.runtime.onMessage.addListener((message: RuntimeMessage, sender, sendRespo
       void testApiKey(message.apiKey, message.model).then(sendResponse);
       return true; // async response
     case 'open-answer-window':
-      if (fromExtensionPage) void openAnswerWindow({ text: message.text });
+      // From the popup, or from a page where the in-page panel couldn't load.
+      if (sender.id === chrome.runtime.id) void openAnswerWindow({ text: message.text, page: message.page });
       return false;
   }
   return false;

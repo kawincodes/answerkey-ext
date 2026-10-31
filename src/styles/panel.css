@@ -1,0 +1,19 @@
+/* Styles for the in-page answer panel. They are injected into the panel's
+   shadow root, so only the panel and component sources are scanned. The build
+   converts rem to px (pages set their own root font size) and adds fallbacks
+   for Tailwind's @property rules, which browsers ignore inside shadow roots. */
+@import "tailwindcss" source(none);
+@source "../panel";
+@source "../components";
+@import "tw-animate-css";
+@import "./theme.css";
+@import "./markdown.css";
+
+.ak-root {
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--foreground);
+  text-align: left;
+  -webkit-font-smoothing: antialiased;
+}

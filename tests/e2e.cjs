@@ -36,6 +36,12 @@ async function waitFor(fn, what, timeout = 8000) {
   throw new Error(`Timed out waiting for ${what} (last: ${last instanceof Error ? last.message : JSON.stringify(last)})`);
 }
 
+/** Chooses an option in a shadcn/Radix Select. */
+async function pickOption(page, trigger, label) {
+  await page.click(trigger);
+  await page.getByRole('option', { name: label, exact: true }).click();
+}
+
 /** Reaches into AnswerKey's closed shadow root through CDP (normal selectors can't). */
 class Shadow {
   constructor(page, cdp) {
@@ -155,7 +161,7 @@ class Shadow {
       'options page to open on install',
     );
     ok(true, 'options page opened automatically on install');
-    await optionsPage.waitForSelector('#welcome:not([hidden])');
+    await optionsPage.waitForSelector('#welcome');
     ok(true, 'first-run welcome card is shown');
     const bodyFont = await optionsPage.evaluate(() => getComputedStyle(document.body).fontSize);
     ok(bodyFont === '14px', `options page body text is 14px, not shrunk by the injected stylesheet (${bodyFont})`);
@@ -172,16 +178,25 @@ class Shadow {
     ok(true, 'floating “Ask Claude” button appears after triple-click selection');
     const fabStyle = await shadow.eval('.ak-fab', function () {
       const s = getComputedStyle(this);
-      return { radius: s.borderTopLeftRadius, bg: s.backgroundColor, font: s.fontSize, spacing: s.letterSpacing };
+      return { position: s.position, radius: s.borderTopLeftRadius, bg: s.backgroundColor, font: s.fontSize, spacing: s.letterSpacing };
     });
-    ok(fabStyle.radius === '999px' && fabStyle.bg !== 'rgb(255, 0, 0)' && fabStyle.font === '13px' && fabStyle.spacing === 'normal',
+    ok(fabStyle.position === 'fixed' && fabStyle.radius === '8px' && fabStyle.bg !== 'rgb(255, 0, 0)' && fabStyle.font === '13px' && fabStyle.spacing === 'normal',
       `shadow-DOM styles apply under strict CSP and page CSS doesn't leak in (${JSON.stringify(fabStyle)})`);
+    ok(!(await shadow.query('[data-ak="panel"]')), 'the React panel is not loaded until it is needed');
     await shadow.click('.ak-fab');
-    await waitFor(async () => (await shadow.text('.ak-notice.ak-error'))?.includes('Add your Anthropic API key'), 'missing-key error');
+    await waitFor(() => shadow.query('[data-ak="panel"]'), 'panel.js to load and mount');
+    ok(true, 'clicking the button lazy-loads the panel module (works under the page\'s strict CSP)');
+    const panelStyle = await shadow.eval('[data-ak="panel"]', function () {
+      const s = getComputedStyle(this);
+      return { radius: s.borderTopLeftRadius, shadow: s.boxShadow, width: s.width, font: getComputedStyle(this.parentElement).fontSize };
+    });
+    ok(panelStyle.radius === '14px' && panelStyle.shadow !== 'none' && panelStyle.width === '440px' && panelStyle.font === '14px',
+      `Tailwind/shadcn styles render inside the shadow root, shadows included (${JSON.stringify(panelStyle)})`);
+    await waitFor(async () => (await shadow.text('[data-ak="notice"][data-kind="error"]'))?.includes('Add your Anthropic API key'), 'missing-key error');
     ok(true, 'missing key shows “Add your Anthropic API key” error');
-    ok((await shadow.allText('.ak-notice.ak-error .ak-btn')).join('|').includes('Open settings'), 'error offers an “Open settings” button');
+    ok((await shadow.allText('[data-ak="notice"][data-kind="error"] button')).join('|').includes('Open settings'), 'error offers an “Open settings” button');
     ok(messageRequests().length === 0, 'no API request without a key');
-    const selectedLabel = await shadow.eval('.ak-question-text', function () { return this.textContent; });
+    const selectedLabel = await shadow.eval('[data-ak="question-text"]', function () { return this.textContent; });
     ok(selectedLabel === 'What is the capital of France? A) Berlin B) Paris C) Rome D) Madrid', 'panel shows the selected text, trimmed');
 
     console.log('\n[options] saving and testing the API key');
@@ -221,14 +236,14 @@ class Shadow {
 
     console.log('\n[answer] Retry after adding the key');
     await page.bringToFront();
-    await shadow.click('.ak-notice.ak-error .ak-btn:last-child');
+    await shadow.click('[data-ak="retry"]');
     await waitFor(async () => (await shadow.text('.ak-md'))?.includes('Paris is the capital of France.'), 'streamed answer');
     const answer = await shadow.text('.ak-md');
     ok(answer.startsWith('Answer: B) Paris'), `answer rendered from Markdown (“${answer.split('\n')[0]}”)`);
     ok((await shadow.eval('.ak-md strong', function () { return this.textContent; })) === 'Answer: B) Paris', 'bold Markdown rendered as <strong>');
-    ok((await shadow.text('.ak-reasoning summary')).includes('Reasoning'), 'reasoning summary settles to “Reasoning”');
-    ok((await shadow.eval('.ak-reasoning-text', function () { return this.textContent; })).includes('Considering the options (turn 1).'), 'summarized thinking is shown in the reasoning section');
-    ok((await shadow.text('.ak-model')) === 'Opus 5.5', 'model chip shows Opus 5.5');
+    ok((await shadow.text('[data-ak="reasoning-trigger"]')).includes('Reasoning'), 'reasoning summary settles to “Reasoning”');
+    ok((await shadow.eval('[data-ak="reasoning-text"]', function () { return this.textContent; })).includes('Considering the options (turn 1).'), 'summarized thinking is shown in the reasoning section');
+    ok((await shadow.text('[data-ak="model"]')) === 'Opus 5.5', 'model chip shows Opus 5.5');
     const first = messageRequests()[0];
     const b = first.body;
     console.log('    (messages request Origin header:', first.headers['origin'] ?? '<none>', ')');
@@ -245,7 +260,7 @@ class Shadow {
     await page.screenshot({ path: path.join(OUT, 'answer-light.png') });
 
     console.log('\n[follow-up] same conversation, thinking replayed unchanged');
-    await shadow.click('.ak-input');
+    await shadow.click('[data-ak="input"]');
     await page.keyboard.type('Why not Rome?');
     await page.keyboard.press('Enter');
     await waitFor(async () => (await shadow.allText('.ak-md')).some((t) => t.includes('Follow-up answer 2.')), 'follow-up answer');
@@ -261,19 +276,20 @@ class Shadow {
 
     console.log('\n[settings snapshot] model change applies to new conversations only');
     await optionsPage.bringToFront();
-    await optionsPage.selectOption('#model', 'claude-haiku-5-5');
+    await pickOption(optionsPage, '#model', 'Claude Haiku 5.5');
     await optionsPage.waitForFunction(() => document.querySelector('#answers-saved')?.textContent === 'Saved.');
+    ok((await optionsPage.textContent('#model-note')).includes('Fastest and cheapest'), 'shadcn Select changes the model and its note');
     await page.bringToFront();
-    await shadow.click('.ak-input');
+    await shadow.click('[data-ak="input"]');
     await page.keyboard.type('One more?');
     await page.keyboard.press('Enter');
     await waitFor(async () => (await shadow.allText('.ak-md')).some((t) => t.includes('Follow-up answer 3.')), 'third answer');
     ok(messageRequests()[2].body.model === 'claude-opus-5-5', 'open conversation stays on claude-opus-5-5');
 
     console.log('\n[close] Escape closes the panel and frees the conversation');
-    await shadow.click('.ak-input');
+    await shadow.click('[data-ak="input"]');
     await page.keyboard.press('Escape');
-    await waitFor(async () => !(await shadow.visible('.ak-panel')), 'panel to close');
+    await waitFor(async () => !(await shadow.visible('[data-ak="panel"]')), 'panel to close');
     ok(true, 'Escape closes the panel');
     const sessionKeys = await waitFor(async () => {
       const keys = await sw.evaluate(() => chrome.storage.session.get(null).then((v) => Object.keys(v)));
@@ -287,23 +303,23 @@ class Shadow {
     await shadow.click('.ak-fab');
     await waitFor(async () => (await shadow.text('.ak-md'))?.includes('Paris'), 'answer');
     ok(messageRequests()[3].body.model === 'claude-haiku-5-5', 'new conversation uses claude-haiku-5-5');
-    ok((await shadow.text('.ak-model')) === 'Opus 5.5' || true, 'model chip updated from the stream');
-    await optionsPage.selectOption('#model', 'claude-opus-5-5');
+    ok((await shadow.text('[data-ak="model"]')) === 'Haiku 5.5', 'model badge shows the model that answered');
+    await pickOption(optionsPage, '#model', 'Claude Opus 5.5');
 
     console.log('\n[stop] stopping a slow answer keeps the partial text for follow-ups');
     await page.click('#q2', { clickCount: 3 });
     await waitFor(() => shadow.visible('.ak-fab'), 'fab');
     await shadow.click('.ak-fab');
     await waitFor(async () => (await shadow.text('.ak-md'))?.includes('word3'), 'partial streaming text');
-    ok(await shadow.query('.ak-send.ak-stop'), 'send button turns into Stop while streaming');
+    ok(await shadow.query('[data-ak="stop"]'), 'send button turns into Stop while streaming');
     await page.screenshot({ path: path.join(OUT, 'streaming.png') });
-    await shadow.click('.ak-send');
-    await waitFor(async () => (await shadow.text('.ak-notice'))?.includes('Stopped'), '“Stopped.” notice');
+    await shadow.click('[data-ak="stop"]');
+    await waitFor(async () => (await shadow.text('[data-ak="notice"]'))?.includes('Stopped'), '“Stopped.” notice');
     ok(true, 'Stop ends the answer with a “Stopped.” notice');
     await waitFor(() => mock.aborted.length >= 1, 'server to see the request aborted');
     ok(true, 'the HTTP stream to the API was aborted (no more tokens billed)');
     const partial = await shadow.text('.ak-md');
-    await shadow.click('.ak-input');
+    await shadow.click('[data-ak="input"]');
     await page.keyboard.type('Continue');
     await page.keyboard.press('Enter');
     await waitFor(async () => (await shadow.allText('.ak-md')).some((t) => t.includes('Follow-up answer 2.')), 'follow-up after stop');
@@ -316,17 +332,17 @@ class Shadow {
     await page.click('#q3', { clickCount: 3 });
     await waitFor(() => shadow.visible('.ak-fab'), 'fab');
     await shadow.click('.ak-fab');
-    await waitFor(async () => (await shadow.text('.ak-notice.ak-warn'))?.includes('declined'), 'refusal notice');
-    ok((await shadow.text('.ak-notice.ak-warn')).includes('cybersecurity'), 'refusal explains the category');
-    ok((await shadow.eval('.ak-input', function () { return !this.disabled && this.placeholder; })) === 'Ask a follow-up…', 'input stays usable after a refusal');
+    await waitFor(async () => (await shadow.text('[data-ak="notice"][data-kind="warn"]'))?.includes('declined'), 'refusal notice');
+    ok((await shadow.text('[data-ak="notice"][data-kind="warn"]')).includes('cybersecurity'), 'refusal explains the category');
+    ok((await shadow.eval('[data-ak="input"]', function () { return !this.disabled && this.placeholder; })) === 'Ask a follow-up…', 'input stays usable after a refusal');
 
     console.log('\n[fallback] mid-answer model switch');
     await page.click('#q4', { clickCount: 3 });
     await waitFor(() => shadow.visible('.ak-fab'), 'fab');
     await shadow.click('.ak-fab');
     await waitFor(async () => (await shadow.text('.ak-md'))?.includes('The answer is B.'), 'fallback answer');
-    ok((await shadow.text('.ak-notice.ak-info')).includes('declined this request, so claude-opus-4-8 answered it instead'), 'fallback notice shown');
-    await shadow.click('.ak-input');
+    ok((await shadow.text('[data-ak="notice"][data-kind="info"]')).includes('declined this request, so claude-opus-4-8 answered it instead'), 'fallback notice shown');
+    await shadow.click('[data-ak="input"]');
     await page.keyboard.type('And why?');
     await page.keyboard.press('Enter');
     await waitFor(async () => (await shadow.allText('.ak-md')).some((t) => t.includes('Follow-up answer 2.')), 'follow-up after fallback');
@@ -341,7 +357,7 @@ class Shadow {
     await page.click('#q5', { clickCount: 3 });
     await waitFor(() => shadow.visible('.ak-fab'), 'fab');
     await shadow.click('.ak-fab');
-    await waitFor(async () => (await shadow.text('.ak-notice.ak-warn'))?.includes('cut off'), 'max_tokens notice');
+    await waitFor(async () => (await shadow.text('[data-ak="notice"][data-kind="warn"]'))?.includes('cut off'), 'max_tokens notice');
     ok(true, 'cut-off answers are labelled');
 
     console.log('\n[API error] 400 is shown with Retry, follow-ups blocked');
@@ -349,13 +365,13 @@ class Shadow {
     await page.click('#q6', { clickCount: 3 });
     await waitFor(() => shadow.visible('.ak-fab'), 'fab');
     await shadow.click('.ak-fab');
-    await waitFor(async () => (await shadow.text('.ak-notice.ak-error'))?.includes('credit balance is too low'), 'billing error');
+    await waitFor(async () => (await shadow.text('[data-ak="notice"][data-kind="error"]'))?.includes('credit balance is too low'), 'billing error');
     ok(true, 'API error message is shown to the user');
     ok(messageRequests().length === before400 + 1, '400 is not retried by the SDK');
-    ok((await shadow.allText('.ak-notice.ak-error .ak-btn')).join('|').includes('Retry'), 'error offers Retry');
-    ok((await shadow.eval('.ak-input', function () { return this.disabled && this.placeholder; })) === 'Retry the question above to continue', 'follow-up input blocked until Retry');
+    ok((await shadow.allText('[data-ak="notice"][data-kind="error"] button')).join('|').includes('Retry'), 'error offers Retry');
+    ok((await shadow.eval('[data-ak="input"]', function () { return this.disabled && this.placeholder; })) === 'Retry the question above to continue', 'follow-up input blocked until Retry');
     await page.screenshot({ path: path.join(OUT, 'error.png') });
-    await shadow.click('.ak-icon-btn[aria-label^="Close"]');
+    await shadow.click('[data-ak="close"]');
 
     console.log('\n[context menu path] background → content script message');
     await page.evaluate(() => window.getSelection().removeAllRanges());
@@ -371,10 +387,10 @@ class Shadow {
       return results;
     });
     ok(handled.length === 1 && handled[0].handled === true, 'exactly one tab handled the message');
-    await waitFor(async () => (await shadow.text('.ak-question-text')) === 'What is 2+2?', 'panel from context-menu message');
+    await waitFor(async () => (await shadow.text('[data-ak="question-text"]')) === 'What is 2+2?', 'panel from context-menu message');
     await waitFor(async () => (await shadow.text('.ak-md'))?.includes('Paris'), 'answer');
     ok(true, 'context-menu message opens the panel with the selection text');
-    await shadow.click('.ak-icon-btn[aria-label^="Close"]');
+    await shadow.click('[data-ak="close"]');
 
     console.log('\n[textarea + iframe selections]');
     await page.click('#ta', { clickCount: 3 });
@@ -414,7 +430,7 @@ class Shadow {
     console.log('\n[popup] typed question opens the answer window');
     const popup = await context.newPage();
     await popup.goto(`chrome-extension://${extId}/popup.html`);
-    await popup.waitForSelector('#ready:not([hidden])');
+    await popup.waitForSelector('#ready');
     ok((await popup.textContent('#model-line')) === 'Opus 5.5 · Medium effort', 'popup shows model and effort');
     await popup.fill('#question', 'What is the tallest mountain?');
     await popup.setViewportSize({ width: 340, height: 420 });
@@ -423,7 +439,7 @@ class Shadow {
     await popup.press('#question', 'Enter');
     const answerWindow = await answerWindowPromise;
     await answerWindow.waitForFunction(() => document.querySelector('.ak-md')?.textContent.includes('Paris'));
-    ok((await answerWindow.textContent('.ak-question-label')) === 'Your question', 'answer window shows the typed question');
+    ok((await answerWindow.textContent('[data-ak="question-label"]')) === 'Your question', 'answer window shows the typed question');
     const typedReq = messageRequests().pop().body;
     ok(typedReq.messages[0].content === 'What is the tallest mountain?', 'typed question sent as plain text');
     await answerWindow.setViewportSize({ width: 480, height: 640 });
@@ -438,13 +454,13 @@ class Shadow {
     await waitFor(async () => (await shadow2.text('.ak-md'))?.includes('Paris is the capital'), 'answer');
     await sleep(500); // let the open animation finish
     await page.screenshot({ path: path.join(OUT, 'answer-dark.png') });
-    await shadow2.click('.ak-icon-btn[aria-label^="Close"]');
+    await shadow2.click('[data-ak="close"]');
 
     console.log('\n[shortcut] Alt+Shift+K (informational: headless may not route browser shortcuts)');
     await page.click('#q1', { clickCount: 3 });
     await page.keyboard.press('Alt+Shift+K');
     try {
-      await waitFor(() => shadow2.visible('.ak-panel'), 'panel from shortcut', 3000);
+      await waitFor(() => shadow2.visible('[data-ak="panel"]'), 'panel from shortcut', 3000);
       console.log('    shortcut opened the panel');
     } catch {
       console.log('    shortcut did not reach the extension in headless mode (not counted)');

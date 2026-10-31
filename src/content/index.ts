@@ -1,10 +1,13 @@
-import type { PageInfo, TabMessage, TabMessageResponse } from '../shared/protocol';
+// Runs in every page. Kept small on purpose: it watches for selections and shows
+// the "Ask Claude" button, and loads the React answer panel (panel.js) only the
+// first time you ask something on the page.
+import { createElement, Sparkles } from 'lucide';
+import type { PanelController } from '../panel/mount';
+import type { PageInfo, RuntimeMessage, TabMessage, TabMessageResponse } from '../shared/protocol';
 import { getSettings, onSettingsChanged, type Settings, siteKey } from '../shared/settings';
-import { ICONS } from '../ui/icons';
-import { AnswerPanel } from '../ui/panel';
-import { PANEL_CSS } from '../ui/styles';
 
 type Global = typeof globalThis & { __answerKeyCleanup?: () => void };
+type PanelModule = typeof import('../panel/mount');
 
 // This script can run twice in a page: once from the manifest and again when the
 // background worker injects it (for example into a tab that was open before an
@@ -15,9 +18,44 @@ const lifetime = new AbortController();
 const { signal } = lifetime;
 const MIN_SELECTION_CHARS = 2;
 
+// The floating button, styled like a shadcn/ui default button.
+const FAB_CSS = `
+.ak-fab {
+  position: fixed;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 12px 0 10px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: oklch(0.205 0 0);
+  color: oklch(0.985 0 0);
+  box-shadow: 0 10px 15px -3px rgb(0 0 0 / 0.15), 0 4px 6px -4px rgb(0 0 0 / 0.15);
+  font: 500 13px/1 ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
+  letter-spacing: normal;
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+  animation: ak-fab-in 120ms ease-out;
+}
+.ak-fab:hover { background: oklch(0.269 0 0); }
+.ak-fab:focus-visible { outline: none; box-shadow: 0 0 0 3px oklch(0.708 0 0 / 0.5); }
+.ak-fab[hidden] { display: none; }
+.ak-fab svg { width: 16px; height: 16px; flex: none; }
+@media (prefers-color-scheme: dark) {
+  .ak-fab { background: oklch(0.922 0 0); color: oklch(0.205 0 0); }
+  .ak-fab:hover { background: oklch(0.87 0 0); }
+}
+@keyframes ak-fab-in { from { opacity: 0; transform: translateY(2px) scale(0.96); } }
+@media (prefers-reduced-motion: reduce) { .ak-fab { animation: none; } }
+`;
+
 let settings: Settings | null = null;
-let ui: { host: HTMLElement; fab: HTMLButtonElement; panel: AnswerPanel } | null = null;
+let ui: { host: HTMLElement; shadow: ShadowRoot; fab: HTMLButtonElement } | null = null;
 let fabTarget: { text: string; rect: DOMRect | null } | null = null;
+let panel: PanelController | null = null;
+let panelModule: Promise<PanelModule> | null = null;
 
 void getSettings().then((loaded) => (settings = loaded));
 onSettingsChanged((updated) => {
@@ -40,7 +78,7 @@ const onTabMessage = (
     if (message.source === 'shortcut' && !message.force && !frameHasFocus()) return false;
     const selection = readSelection();
     const text = selection.text.trim() ? selection.text : (message.text ?? '');
-    openPanel(text, selection.rect);
+    void openPanel(text, selection.rect);
     sendResponse({ handled: true });
   }
   return false;
@@ -64,6 +102,7 @@ window.addEventListener('resize', hideFab, { passive: true, signal });
   }
   ui?.host.remove();
   ui = null;
+  panel = null;
 };
 
 function onMouseUp(event: MouseEvent): void {
@@ -105,7 +144,7 @@ function maybeShowFab(pointer: { x: number; y: number } | null): void {
   const y = pointer?.y ?? rect?.bottom ?? 0;
   fab.hidden = false;
   const width = fab.offsetWidth || 110;
-  const height = fab.offsetHeight || 30;
+  const height = fab.offsetHeight || 32;
   let left = x + 8;
   let top = y + 14;
   if (left + width > window.innerWidth - 8) left = x - width - 8;
@@ -127,11 +166,34 @@ function fabAllowed(): boolean {
   return !settings.disabledSites.includes(siteKey(topLevelUrl()));
 }
 
-function openPanel(text: string, anchor: DOMRect | null): void {
+async function openPanel(text: string, anchor: DOMRect | null): Promise<void> {
   hideFab();
-  const { panel } = ensureUi();
-  panel.start(text.trim() ? 'selection' : 'typed', text, pageInfo());
-  panel.placeNear(anchor);
+  const page = pageInfo();
+  try {
+    const controller = await getPanel();
+    controller.start(text.trim() ? 'selection' : 'typed', text, page);
+    controller.placeNear(anchor);
+  } catch (err) {
+    // Couldn't load the panel into this page; show the answer in its own window.
+    console.warn('AnswerKey: could not open the answer panel on this page.', err);
+    sendRuntimeMessage({ type: 'open-answer-window', text, page });
+  }
+}
+
+async function getPanel(): Promise<PanelController> {
+  if (panel) return panel;
+  const { mountPanel } = await loadPanelModule();
+  const { shadow } = ensureUi();
+  panel ??= mountPanel(shadow, { onClose: () => undefined, copyText });
+  return panel;
+}
+
+function loadPanelModule(): Promise<PanelModule> {
+  if (!panelModule) {
+    panelModule = import(chrome.runtime.getURL('panel.js')) as Promise<PanelModule>;
+    panelModule.catch(() => (panelModule = null)); // allow another try later
+  }
+  return panelModule;
 }
 
 function ensureUi(): NonNullable<typeof ui> {
@@ -142,20 +204,15 @@ function ensureUi(): NonNullable<typeof ui> {
     'all: initial; position: fixed; top: 0; left: 0; width: 0; height: 0; z-index: 2147483647;';
   const shadow = host.attachShadow({ mode: 'closed' });
   const style = document.createElement('style');
-  style.textContent = PANEL_CSS;
-  const root = document.createElement('div');
-  root.className = 'ak-root';
-  shadow.append(style, root);
+  style.textContent = FAB_CSS;
 
   const fab = document.createElement('button');
   fab.type = 'button';
   fab.className = 'ak-fab';
+  fab.dataset.ak = 'fab';
   fab.hidden = true;
   fab.title = 'Ask Claude about the selected text';
-  const icon = document.createElement('span');
-  icon.className = 'ak-fab-icon';
-  icon.innerHTML = ICONS.key;
-  fab.append(icon, 'Ask Claude');
+  fab.append(createElement(Sparkles, { 'aria-hidden': 'true' }), 'Ask Claude');
   // Keep the page's selection (and focus) when the button is pressed.
   fab.addEventListener('mousedown', (event) => {
     event.preventDefault();
@@ -164,13 +221,14 @@ function ensureUi(): NonNullable<typeof ui> {
   fab.addEventListener('click', (event) => {
     event.stopPropagation();
     const target = fabTarget ?? readSelection();
-    if (target.text.trim()) openPanel(target.text, target.rect);
+    if (target.text.trim()) void openPanel(target.text, target.rect);
   });
+  // Start loading the panel while the pointer approaches the button.
+  fab.addEventListener('pointerenter', () => void loadPanelModule().catch(() => undefined));
 
-  const panel = new AnswerPanel({ mode: 'floating', onClose: () => undefined, copyText });
-  root.append(fab, panel.element);
+  shadow.append(style, fab);
   document.documentElement.append(host);
-  ui = { host, fab, panel };
+  ui = { host, shadow, fab };
   return ui;
 }
 
@@ -224,6 +282,14 @@ function extensionAlive(): boolean {
     return Boolean(chrome.runtime?.id);
   } catch {
     return false;
+  }
+}
+
+function sendRuntimeMessage(message: RuntimeMessage): void {
+  try {
+    chrome.runtime.sendMessage(message).catch(() => undefined);
+  } catch {
+    // Extension was reloaded; this page's copy of AnswerKey is orphaned.
   }
 }
 
