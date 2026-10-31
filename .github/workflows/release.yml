@@ -9,7 +9,8 @@
 #
 # The release job type-checks, builds the zip, runs the end-to-end test against
 # the unpacked zip (exactly what users install), then publishes the zip, its
-# SHA-256 checksum and the install instructions from .github/release-notes.md.
+# SHA-256 checksum, the version's section of CHANGELOG.md and the install
+# instructions from .github/release-notes.md.
 
 name: Release
 
@@ -110,7 +111,18 @@ jobs:
           REPO_URL: ${{ github.server_url }}/${{ github.repository }}
         run: |
           sha256sum "answerkey-edge-$TAG.zip" > SHA256SUMS.txt
-          sed -e "s|{{VERSION}}|$TAG|g" -e "s|{{REPO_URL}}|$REPO_URL|g" .github/release-notes.md > release-notes.md
+          # This version's section of CHANGELOG.md ("## 1.2.3 — date"), if there is one.
+          changes=$(awk -v v="${TAG#v}" '
+            $1 == "##" { if (found) exit; found = ($2 == v || $2 == "v" v || $2 == "[" v "]"); next }
+            found { print }
+          ' CHANGELOG.md 2> /dev/null || true)
+          if [ -n "$(printf '%s' "$changes" | tr -d '[:space:]')" ]; then
+            printf "## What's new in %s\n%s\n\n" "$TAG" "$changes" > changes.md
+          else
+            : > changes.md
+          fi
+          sed -e "s|{{VERSION}}|$TAG|g" -e "s|{{REPO_URL}}|$REPO_URL|g" \
+            -e '/{{CHANGES}}/{r changes.md' -e 'd}' .github/release-notes.md > release-notes.md
           gh release create "$TAG" "answerkey-edge-$TAG.zip" SHA256SUMS.txt \
             --title "AnswerKey $TAG" \
             --notes-file release-notes.md \

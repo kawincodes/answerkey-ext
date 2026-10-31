@@ -1,5 +1,6 @@
 Select text on any web page and get an answer from Claude, using your own Anthropic API key.
 
+{{CHANGES}}
 ## Install in Microsoft Edge
 
 1. Under **Assets** below, download **answerkey-edge-{{VERSION}}.zip**. (Not "Source code": that's the code, not the extension.)

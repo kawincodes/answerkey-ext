@@ -178,15 +178,17 @@ Screenshots from the run are saved in `tests/out/`.
 ## Releasing a new version on GitHub
 
 Releases are built and published by GitHub Actions (`.github/workflows/release.yml`). Set the new `version`
-in `package.json` (for example `1.0.1`; it is copied into the manifest), then either:
+in `package.json` (for example `1.1.1`; it is copied into the manifest), add a `## 1.1.1 — <date>` section to
+`CHANGELOG.md` (it becomes the release's "What's new"), then either:
 
 - push that change to the default branch, and the release is published automatically, or
-- push a matching tag (`git tag v1.0.1 && git push origin v1.0.1`), or
+- push a matching tag (`git tag v1.1.1 && git push origin v1.1.1`), or
 - open **Actions → Release → Run workflow** on GitHub.
 
 The workflow type-checks, builds the zip, runs the end-to-end test against the unpacked zip (exactly what
-users install), and publishes a release tagged `v<version>` with the zip, its SHA-256 checksum, and the
-install steps from `.github/release-notes.md` followed by GitHub's list of changes since the last release.
+users install), and publishes a release tagged `v<version>` with the zip, its SHA-256 checksum, the
+version's `CHANGELOG.md` section, the install steps from `.github/release-notes.md`, and GitHub's link to the
+changes since the last release.
 A version that already has a release is skipped, so other edits to `package.json` never publish anything. It
 stops with an error if a pushed tag doesn't match `package.json`.
 

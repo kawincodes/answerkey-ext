@@ -1,6 +1,6 @@
 {
   "name": "answerkey-ext",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "description": "Microsoft Edge extension: select text on any page and get answers from Claude using your own Anthropic API key.",
   "homepage": "https://github.com/kawincodes/answerkey-ext#readme",
