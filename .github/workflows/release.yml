@@ -1,35 +1,82 @@
 # Publishes AnswerKey as a GitHub release with an installable zip.
 #
-# Start a release in either of two ways (set "version" in package.json first):
+# Set a new "version" in package.json, then do any one of these:
+#   - push that change to the default branch (released automatically), or
 #   - push a matching tag:   git tag v1.0.1 && git push origin v1.0.1
-#   - or Actions tab → Release → Run workflow (releases the version in package.json
-#     from the branch you pick, and creates the tag)
+#   - or Actions tab → Release → Run workflow
+# A version that already has a release is skipped, so other edits to
+# package.json never publish anything.
 #
-# The run type-checks, builds the zip, runs the end-to-end test against the
-# unpacked zip (exactly what users install), then publishes the zip, its SHA-256
-# checksum and the install instructions from .github/release-notes.md.
+# The release job type-checks, builds the zip, runs the end-to-end test against
+# the unpacked zip (exactly what users install), then publishes the zip, its
+# SHA-256 checksum and the install instructions from .github/release-notes.md.
 
 name: Release
 
 on:
   push:
+    branches: ['**']
+    paths: ['package.json'] # branch pushes only; tag pushes always run
     tags: ['v*']
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: release
   cancel-in-progress: false
 
 jobs:
-  release:
+  check:
+    name: Check for an unreleased version
+    # Branch pushes release only from the default branch.
+    if: github.event_name != 'push' || github.ref_type == 'tag' || github.ref_name == github.event.repository.default_branch
     runs-on: ubuntu-latest
-    timeout-minutes: 20
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
+    outputs:
+      publish: ${{ steps.version.outputs.publish }}
+      tag: ${{ steps.version.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Compare package.json with existing releases
+        id: version
+        run: |
+          tag="v$(node -p "require('./package.json').version")"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          if [ "$GITHUB_REF_TYPE" = tag ] && [ "$GITHUB_REF_NAME" != "$tag" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME doesn't match the version in package.json ($tag). Update package.json, then tag that commit."
+            exit 1
+          fi
+          if gh release view "$tag" > /dev/null 2>&1; then
+            echo "::notice::$tag is already released. Set a new version in package.json to publish another release."
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # The commit an existing tag points at (annotated tags are peeled).
+          tagged=$(git ls-remote origin "refs/tags/$tag^{}" | cut -f1)
+          [ -n "$tagged" ] || tagged=$(git ls-remote origin "refs/tags/$tag" | cut -f1)
+          if [ -n "$tagged" ] && [ "$tagged" != "$GITHUB_SHA" ]; then
+            echo "::error::Tag $tag already points at another commit ($tagged). Set a new version in package.json."
+            exit 1
+          fi
+          echo "publish=true" >> "$GITHUB_OUTPUT"
+
+  release:
+    name: Build, test and publish
+    needs: check
+    if: needs.check.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      TAG: ${{ needs.check.outputs.tag }}
     steps:
       - uses: actions/checkout@v7
 
@@ -37,25 +84,6 @@ jobs:
         with:
           node-version: 22
           cache: npm
-
-      - name: Check the version
-        id: version
-        run: |
-          tag="v$(node -p "require('./package.json').version")"
-          if [ "$GITHUB_REF_TYPE" = tag ]; then
-            if [ "$GITHUB_REF_NAME" != "$tag" ]; then
-              echo "::error::Tag $GITHUB_REF_NAME doesn't match the version in package.json ($tag). Update package.json, then tag that commit."
-              exit 1
-            fi
-          elif git ls-remote --exit-code --tags origin "refs/tags/$tag" > /dev/null; then
-            echo "::error::Tag $tag already exists. Bump the version in package.json first."
-            exit 1
-          fi
-          if gh release view "$tag" > /dev/null 2>&1; then
-            echo "::error::Release $tag already exists. Bump the version in package.json first."
-            exit 1
-          fi
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
       - name: Install dependencies
         run: npm ci
@@ -67,8 +95,6 @@ jobs:
         run: npm run zip
 
       - name: Unpack the zip the way users will
-        env:
-          TAG: ${{ steps.version.outputs.tag }}
         run: unzip -q "answerkey-edge-$TAG.zip" -d unpacked
 
       - name: Install Playwright's Chromium for the end-to-end test
@@ -81,7 +107,6 @@ jobs:
 
       - name: Publish the release
         env:
-          TAG: ${{ steps.version.outputs.tag }}
           REPO_URL: ${{ github.server_url }}/${{ github.repository }}
         run: |
           sha256sum "answerkey-edge-$TAG.zip" > SHA256SUMS.txt

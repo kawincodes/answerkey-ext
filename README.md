@@ -158,24 +158,18 @@ Screenshots from the run are saved in `tests/out/`.
 
 ## Releasing a new version on GitHub
 
-Releases are built and published by GitHub Actions (`.github/workflows/release.yml`).
+Releases are built and published by GitHub Actions (`.github/workflows/release.yml`). Set the new `version`
+in `package.json` (for example `1.0.1`; it is copied into the manifest), then either:
 
-1. Set the new `version` in `package.json` (for example `1.0.1`; it is copied into the manifest) and push
-   the commit.
-2. Push a matching tag:
-
-   ```bash
-   git tag v1.0.1
-   git push origin v1.0.1
-   ```
-
-   Or open **Actions → Release → Run workflow** on GitHub, which releases the version in `package.json` from
-   the branch you pick and creates the tag for you.
+- push that change to the default branch, and the release is published automatically, or
+- push a matching tag (`git tag v1.0.1 && git push origin v1.0.1`), or
+- open **Actions → Release → Run workflow** on GitHub.
 
 The workflow type-checks, builds the zip, runs the end-to-end test against the unpacked zip (exactly what
-users install), and publishes a release with the zip, its SHA-256 checksum, and the install steps from
-`.github/release-notes.md` followed by GitHub's list of changes since the last release. It refuses to run if
-the tag and `package.json` disagree or the release already exists.
+users install), and publishes a release tagged `v<version>` with the zip, its SHA-256 checksum, and the
+install steps from `.github/release-notes.md` followed by GitHub's list of changes since the last release.
+A version that already has a release is skipped, so other edits to `package.json` never publish anything. It
+stops with an error if a pushed tag doesn't match `package.json`.
 
 ## Publishing to the Edge Add-ons store
 
