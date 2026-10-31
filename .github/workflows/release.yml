@@ -1,0 +1,93 @@
+# Publishes AnswerKey as a GitHub release with an installable zip.
+#
+# Start a release in either of two ways (set "version" in package.json first):
+#   - push a matching tag:   git tag v1.0.1 && git push origin v1.0.1
+#   - or Actions tab → Release → Run workflow (releases the version in package.json
+#     from the branch you pick, and creates the tag)
+#
+# The run type-checks, builds the zip, runs the end-to-end test against the
+# unpacked zip (exactly what users install), then publishes the zip, its SHA-256
+# checksum and the install instructions from .github/release-notes.md.
+
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Check the version
+        id: version
+        run: |
+          tag="v$(node -p "require('./package.json').version")"
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            if [ "$GITHUB_REF_NAME" != "$tag" ]; then
+              echo "::error::Tag $GITHUB_REF_NAME doesn't match the version in package.json ($tag). Update package.json, then tag that commit."
+              exit 1
+            fi
+          elif git ls-remote --exit-code --tags origin "refs/tags/$tag" > /dev/null; then
+            echo "::error::Tag $tag already exists. Bump the version in package.json first."
+            exit 1
+          fi
+          if gh release view "$tag" > /dev/null 2>&1; then
+            echo "::error::Release $tag already exists. Bump the version in package.json first."
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type-check
+        run: npm run typecheck
+
+      - name: Build the extension zip
+        run: npm run zip
+
+      - name: Unpack the zip the way users will
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: unzip -q "answerkey-edge-$TAG.zip" -d unpacked
+
+      - name: Install Playwright's Chromium for the end-to-end test
+        run: |
+          npm install --no-save playwright
+          npx playwright install --with-deps chromium
+
+      - name: End-to-end test against the unpacked zip
+        run: node tests/e2e.cjs unpacked
+
+      - name: Publish the release
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+          REPO_URL: ${{ github.server_url }}/${{ github.repository }}
+        run: |
+          sha256sum "answerkey-edge-$TAG.zip" > SHA256SUMS.txt
+          sed -e "s|{{VERSION}}|$TAG|g" -e "s|{{REPO_URL}}|$REPO_URL|g" .github/release-notes.md > release-notes.md
+          gh release create "$TAG" "answerkey-edge-$TAG.zip" SHA256SUMS.txt \
+            --title "AnswerKey $TAG" \
+            --notes-file release-notes.md \
+            --generate-notes \
+            --target "$GITHUB_SHA"

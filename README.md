@@ -22,7 +22,32 @@ text. AnswerKey uses **your own Anthropic API key**, so there is no account, ser
   letter" or "Reply in Hindi"), and whether to include the page title and site name for context.
 - Light and dark themes, following your system setting.
 
-## Install (load unpacked in Edge)
+## Install
+
+### From a release (no build tools needed)
+
+1. Open the [latest release](https://github.com/kawincodes/answerkey-ext/releases/latest) and, under
+   **Assets**, download **answerkey-edge-v….zip** (not "Source code").
+2. Extract it to a folder you'll keep, for example `Documents\AnswerKey` (right-click the zip →
+   **Extract All…**). Edge runs the extension from this folder, so don't delete or move it.
+3. Open `edge://extensions` in Microsoft Edge and turn on **Developer mode** (left sidebar, or the toggle
+   at the bottom).
+4. Click **Load unpacked** and select the extracted folder (the one that contains `manifest.json`).
+5. The AnswerKey settings page opens. Paste your API key and click **Save key**. AnswerKey checks the key
+   right away. Create a key in the [Claude Console](https://platform.claude.com/settings/keys) if you don't
+   have one.
+6. Reload tabs that were already open, so the **Ask Claude** button can appear in them.
+
+It also works in Google Chrome and other Chromium browsers (`chrome://extensions` → **Load unpacked**).
+
+**Updating:** download the new zip, extract it into the same folder (replacing the old files), and click the
+reload icon on the AnswerKey card in `edge://extensions`. Your key and settings are kept. Loading it from a
+different folder installs a separate copy, and you'd have to enter your key again.
+
+Edge may warn about extensions in developer mode when it starts; that's expected for extensions installed
+this way.
+
+### From source
 
 You need [Node.js](https://nodejs.org/) 20 or newer.
 
@@ -31,17 +56,8 @@ npm install
 npm run build
 ```
 
-This creates the `dist/` folder, which is the extension. Then:
-
-1. Open `edge://extensions` in Microsoft Edge.
-2. Turn on **Developer mode** (left sidebar, or the toggle at the bottom).
-3. Click **Load unpacked** and choose the `dist` folder.
-4. The AnswerKey settings page opens. Paste your API key and click **Save key**. AnswerKey checks the key
-   right away. Create a key in the [Claude Console](https://platform.claude.com/settings/keys) if you don't
-   have one.
-5. Reload tabs that were already open, so the **Ask Claude** button can appear in them.
-
-It also works in Google Chrome and other Chromium browsers (`chrome://extensions` → **Load unpacked**).
+This creates the `dist/` folder, which is the extension. Load it with **Load unpacked** as in steps 3–6
+above, choosing the `dist` folder.
 
 After changing the code, run `npm run build` again and click the reload icon on the AnswerKey card in
 `edge://extensions`.
@@ -122,7 +138,7 @@ web page ── content script ──(Port: question / streamed answer)── ba
 | `npm run build` | Production build into `dist/` (minified). |
 | `npm run watch` | Rebuilds on every change, unminified with source maps. |
 | `npm run typecheck` | Type-checks all TypeScript. |
-| `npm run zip` | Builds `answerkey-edge-v<version>.zip` for the Edge Add-ons store. |
+| `npm run zip` | Builds `answerkey-edge-v<version>.zip`, the file attached to GitHub releases and uploaded to the Edge Add-ons store. |
 | `npm run test:e2e` | End-to-end test (see below). |
 
 **End-to-end test.** `tests/e2e.cjs` loads `dist/` into Chromium with Playwright, points `api.anthropic.com` at
@@ -139,6 +155,27 @@ npm run test:e2e
 ```
 
 Screenshots from the run are saved in `tests/out/`.
+
+## Releasing a new version on GitHub
+
+Releases are built and published by GitHub Actions (`.github/workflows/release.yml`).
+
+1. Set the new `version` in `package.json` (for example `1.0.1`; it is copied into the manifest) and push
+   the commit.
+2. Push a matching tag:
+
+   ```bash
+   git tag v1.0.1
+   git push origin v1.0.1
+   ```
+
+   Or open **Actions → Release → Run workflow** on GitHub, which releases the version in `package.json` from
+   the branch you pick and creates the tag for you.
+
+The workflow type-checks, builds the zip, runs the end-to-end test against the unpacked zip (exactly what
+users install), and publishes a release with the zip, its SHA-256 checksum, and the install steps from
+`.github/release-notes.md` followed by GitHub's list of changes since the last release. It refuses to run if
+the tag and `package.json` disagree or the release already exists.
 
 ## Publishing to the Edge Add-ons store
 
